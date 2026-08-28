@@ -14,11 +14,12 @@ from homeassistant.components.switch import (
 from homeassistant.components.tado import DOMAIN
 from homeassistant.const import ATTR_ENTITY_ID, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from tests.common import MockConfigEntry, snapshot_platform
 
-CHILD_LOCK_SWITCH_ENTITY = "switch.baseboard_heater_baseboard_heater_child_lock"
+CHILD_LOCK_SWITCH_ENTITY = "switch.wr4_child_lock"
+OLD_CHILD_LOCK_SWITCH_ENTITY = "switch.baseboard_heater_baseboard_heater_child_lock"
 
 
 @pytest.fixture(autouse=True)
@@ -30,7 +31,10 @@ def setup_platforms() -> Generator[None]:
 
 @pytest.mark.usefixtures("init_integration")
 async def test_entities(
-    hass: HomeAssistant, entity_registry: er.EntityRegistry, snapshot: SnapshotAssertion
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    snapshot: SnapshotAssertion,
 ) -> None:
     """Test creation of switch entities."""
 
@@ -38,12 +42,62 @@ async def test_entities(
 
     await snapshot_platform(hass, entity_registry, snapshot, config_entry.entry_id)
 
+    entity_entry = entity_registry.async_get(CHILD_LOCK_SWITCH_ENTITY)
+    assert entity_entry is not None
+    assert entity_entry.device_id is not None
+    device_entry = device_registry.async_get(entity_entry.device_id)
+    assert device_entry is not None
+    assert (DOMAIN, "WR4") in device_entry.identifiers
+
+
+@pytest.mark.usefixtures("init_integration")
+async def test_migrate_child_lock_entity(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """Test migration of the child lock entity from zone to device."""
+
+    config_entry: MockConfigEntry = hass.config_entries.async_entries(DOMAIN)[0]
+    entity_entry = entity_registry.async_get(CHILD_LOCK_SWITCH_ENTITY)
+    assert entity_entry is not None
+
+    zone_device = next(
+        device
+        for device in device_registry.devices.values()
+        if (DOMAIN, "1_1") in device.identifiers
+    )
+    entity_registry.async_update_entity(
+        CHILD_LOCK_SWITCH_ENTITY,
+        device_id=zone_device.id,
+        name="Custom child lock",
+        new_entity_id=OLD_CHILD_LOCK_SWITCH_ENTITY,
+        new_unique_id="1 1 child-lock",
+    )
+
+    assert await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    migrated_entry = entity_registry.async_get(OLD_CHILD_LOCK_SWITCH_ENTITY)
+    assert migrated_entry is not None
+    assert migrated_entry.unique_id == "WR4 1 child-lock"
+    assert migrated_entry.name == "Custom child lock"
+    assert migrated_entry.device_id is not None
+
+    migrated_device = device_registry.async_get(migrated_entry.device_id)
+    assert migrated_device is not None
+    assert (DOMAIN, "WR4") in migrated_device.identifiers
+    assert entity_registry.async_get(CHILD_LOCK_SWITCH_ENTITY) is None
+
 
 @pytest.mark.parametrize(
     ("method", "expected"), [(SERVICE_TURN_ON, True), (SERVICE_TURN_OFF, False)]
 )
 @pytest.mark.usefixtures("init_integration")
-async def test_set_child_lock(hass: HomeAssistant, method, expected) -> None:
+async def test_set_child_lock(
+    hass: HomeAssistant, method: str, expected: bool
+) -> None:
     """Test enable child lock on switch."""
 
     with patch(
@@ -56,5 +110,4 @@ async def test_set_child_lock(hass: HomeAssistant, method, expected) -> None:
             blocking=True,
         )
 
-    mock_set_state.assert_called_once()
-    assert mock_set_state.call_args[0][1] is expected
+    mock_set_state.assert_called_once_with("WR4", expected)
