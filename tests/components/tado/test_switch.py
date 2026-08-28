@@ -95,7 +95,9 @@ async def test_migrate_child_lock_entity(
     ("method", "expected"), [(SERVICE_TURN_ON, True), (SERVICE_TURN_OFF, False)]
 )
 @pytest.mark.usefixtures("init_integration")
-async def test_set_child_lock(hass: HomeAssistant, method, expected) -> None:
+async def test_set_child_lock(
+    hass: HomeAssistant, method: str, expected: bool
+) -> None:
     """Test enable child lock on switch."""
 
     with patch(
